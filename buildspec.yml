@@ -1,21 +1,37 @@
 version: 0.2
 
+env:
+  secrets-manager:
+    DOCKERHUB_PASS: "/dockerhub/credentials:password"
+    DOCKERHUB_USERNAME: "/dockerhub/credentials:username"
+
 phases:
-  install:
-    runtime-versions:
-      nodejs: 16
   pre_build:
+    on-failure: ABORT
     commands:
-      - echo Installing dependencies...
-      - npm install
+      - echo Logging in to Docker Hub...
+      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - echo image_tag $IMAGE_TAG
+      - IMAGE_URI="docker.io/nateoaks/nextjsapi:$IMAGE_TAG"
+      - echo Repository $IMAGE_URI
+      - docker login --username $DOCKERHUB_USERNAME --password $DOCKERHUB_PASS
+      - docker pull $IMAGE_URI || true
   build:
+    on-failure: ABORT
     commands:
       - echo Build started on `date`
-      - echo Compiling the Node.js code
-      - npm run build
+      - echo Building the Docker image... $IMAGE_URI
+      - DOCKER_BUILDKIT=1 docker build --build-arg BUILDKIT_INLINE_CACHE=1 --tag $IMAGE_URI --cache-from $IMAGE_URI --target production .
+  post_build:
+    on-failure: ABORT
+    commands:
+      - bash -c "if [ /"$CODEBUILD_BUILD_SUCCEEDING/" == /"0/" ]; then exit 1; fi"
+      - echo Build stage successfully completed on `date`
+      - echo Pushing the Docker image...
+      - docker push $IMAGE_URI
+      - printf '[{"name":"'"$API_CONTAINER_NAME"'","imageUri":"%s"}]' "$IMAGE_URI" > imagedefinitions.json
+      - echo Build completed on `date`
+
 artifacts:
-  files:
-    - .next/**/*
-    - static/**/*
-    - package.json
-    - next.config.js
+  files: 
+    - imagedefinitions.json
